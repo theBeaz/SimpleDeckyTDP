@@ -17,6 +17,13 @@ PL2_MODES = ('flat', 'offset', 'max')
 DEFAULT_PL2_MODE = 'flat'
 DEFAULT_PL2_OFFSET = 7
 
+# Used only when the hardware doesn't reliably report a PL2 ceiling (RAPL's
+# constraint_1_max_power_uw is known to read 0 on real hardware). Mirrors
+# cpu_utils.INTEL_MAX_TDP -- the same "arbitrary values can be set on Intel
+# devices, likely a bug in intel-rapl" safety ceiling already used for the
+# main TDP slider on these platforms.
+FALLBACK_PL2_MAX_WATTS = 40
+
 PL2_MODE_SETTING = 'pl2Mode'
 PL2_OFFSET_SETTING = 'pl2Offset'
 
@@ -120,23 +127,33 @@ def get_pl1_range(interface):
   return min_w, max_w
 
 
-def _reliable_max(declared, current):
-  # constraint_*_max_power_uw is known to unreliably report 0 or transient
-  # low readings on some devices/kernels (msi-wmi-platform's min_value/max_value
-  # attributes don't have this problem -- they're real firmware-declared
-  # constants). Treat a falsy declared max as "unknown" rather than trusting
-  # it outright, so a flaky reading never clamps below what's already applied.
-  candidates = [v for v in (declared, current) if v]
-  if not candidates:
-    return None
-  return max(candidates)
-
-
 def get_pl2_max(interface):
+  # constraint_1_max_power_uw is known to unreliably report 0 on some
+  # devices/kernels (observed on real hardware). Unlike PL1 range discovery,
+  # there's no safe fallback to "current" here: under flat mode, PL2's
+  # current value is deliberately forced to track PL1, so falling back to it
+  # would just rediscover whatever flat mode already wrote, permanently
+  # trapping offset/max modes at flat. Return None (unknown) instead --
+  # resolve_pl2() has its own safe fallback ceiling for this case.
   declared = _to_watts(_read_int(_pl2_max_path(interface)), interface)
+  return declared if declared else None
+
+
+def is_pl2_supported(interface, pl2_max, pl1_max):
+  """Whether hardware genuinely exposes an independently-controllable PL2.
+
+  On RAPL, PL1 (constraint_0) and PL2 (constraint_1) are always separate
+  write targets whenever the domain exists at all, so this doesn't require a
+  discoverable numeric ceiling -- offset mode works safely without one since
+  it's independently hard-capped at PL2_OFFSET_MAX_WATTS. On msi-wmi-platform,
+  min_value/max_value are real firmware constants, so real headroom
+  (pl2_max > pl1_max) is a meaningful, trustworthy signal to require there.
+  """
+  if interface is None:
+    return False
   if interface == MSI_WMI:
-    return declared
-  return _reliable_max(declared, get_pl2_current(interface))
+    return pl2_max is not None and pl1_max is not None and pl2_max > pl1_max
+  return os.path.exists(_pl2_current_path(interface))
 
 
 def get_pl2_min(interface):
@@ -156,12 +173,18 @@ def resolve_pl2(pl1, mode, offset, pl2_max, pl2_min=None):
 
   PL2 must never end up below PL1 -- the kernel accepts and silently keeps a
   PL2 < PL1 state, so this function (not the hardware) is the enforcement point.
+
+  pl2_max may be None when the hardware doesn't reliably report a ceiling
+  (see get_pl2_max) -- FALLBACK_PL2_MAX_WATTS is used in that case so offset
+  mode (already self-capped at PL2_OFFSET_MAX_WATTS) still works, and max
+  mode gets a conservative bound instead of silently degrading to flat.
   """
   # defensive cap: protects against a hand-edited settings.json with offset > 7
   safe_offset = max(0, min(PL2_OFFSET_MAX_WATTS, offset))
+  effective_pl2_max = pl2_max if pl2_max is not None else FALLBACK_PL2_MAX_WATTS
 
   if mode == 'max':
-    target = pl2_max
+    target = effective_pl2_max
   elif mode == 'offset':
     target = pl1 + safe_offset
   else:
@@ -169,7 +192,7 @@ def resolve_pl2(pl1, mode, offset, pl2_max, pl2_min=None):
     target = pl1
 
   floor = max(pl1, pl2_min) if pl2_min is not None else pl1
-  return max(floor, min(pl2_max, target))
+  return max(floor, min(effective_pl2_max, target))
 
 
 def get_pl2_settings():
@@ -237,13 +260,7 @@ def apply_pl1_pl2(pl1_target):
   current_pl2 = get_pl2_current(interface)
 
   mode, offset = get_pl2_settings()
-
-  if pl2_max is None:
-    # no discoverable PL2 ceiling on this interface -- degrade to today's flat
-    # behaviour rather than guessing at a safe ceiling
-    resolved_pl2 = pl1_target
-  else:
-    resolved_pl2 = resolve_pl2(pl1_target, mode, offset, pl2_max, pl2_min)
+  resolved_pl2 = resolve_pl2(pl1_target, mode, offset, pl2_max, pl2_min)
 
   pl1_path = _pl1_current_path(interface)
   pl2_path = _pl2_current_path(interface)

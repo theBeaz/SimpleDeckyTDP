@@ -78,7 +78,7 @@ class Plugin:
             pl2_interface = intel_rapl.detect_interface()
             pl2_max = intel_rapl.get_pl2_max(pl2_interface) if pl2_interface else None
             settings['pl2Max'] = pl2_max
-            settings['pl2Supported'] = bool(pl2_interface) and pl2_max is not None and pl2_max > max_tdp
+            settings['pl2Supported'] = intel_rapl.is_pl2_supported(pl2_interface, pl2_max, max_tdp)
           else:
             # firmware-declared per-device TDP range (e.g. Lenovo Legion WMI).
             # setdefault so a user's saved custom range is not overwritten.
