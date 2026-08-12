@@ -7,7 +7,7 @@ import json
 import ssl
 import shutil
 
-API_URL = "https://api.github.com/repos/aarron-lee/SimpleDeckyTDP/releases/latest"
+API_URL = "https://api.github.com/repos/theBeaz/SimpleDeckyTDP/releases/latest"
 
 def restart_decky_loader():
   env = os.environ.copy()
