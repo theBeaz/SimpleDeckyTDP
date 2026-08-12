@@ -90,6 +90,14 @@ export enum GpuModes {
   FIXED = "FIXED",
 }
 
+// values must match intel_rapl.PL2_MODES exactly (lowercase) -- unlike GpuModes,
+// these do NOT support TS's enum-reverse-mapping trick (key text != value text)
+export enum Pl2Modes {
+  FLAT = "flat",
+  OFFSET = "offset",
+  MAX = "max",
+}
+
 export enum ServerAPIMethods {
   SET_SETTING = "set_setting",
   GET_SETTINGS = "get_settings",
@@ -100,6 +108,7 @@ export enum ServerAPIMethods {
   PERSIST_TDP = "persist_tdp",
   PERSIST_GPU = "persist_gpu",
   PERSIST_SMT = "persist_smt",
+  PERSIST_PL2 = "persist_pl2",
   ON_SUSPEND = "on_suspend",
   ON_RESUME = "on_resume",
   OTA_UPDATE = "ota_update",
@@ -281,6 +290,20 @@ export const persistSmt = ({
   }
 
   return call(ServerAPIMethods.PERSIST_SMT, smt, gameId);
+};
+
+export const persistPl2 = ({
+  pl2Mode,
+  pl2Offset,
+}: {
+  pl2Mode: string;
+  pl2Offset: number;
+}) => {
+  if (IS_DESKTOP) {
+    return call(ServerAPIMethods.PERSIST_PL2, { pl2Mode, pl2Offset });
+  }
+
+  return call(ServerAPIMethods.PERSIST_PL2, pl2Mode, pl2Offset);
 };
 
 export const persistCpuBoost = ({

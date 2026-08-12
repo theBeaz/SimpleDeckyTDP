@@ -6,6 +6,7 @@ import plugin_timeout
 import advanced_options
 import power_utils
 import cpu_utils
+import intel_rapl
 import os
 from plugin_settings import merge_tdp_profiles, get_saved_settings, get_tdp_profile, get_active_tdp_profile, per_game_profiles_enabled, set_setting as persist_setting
 from gpu_utils import get_gpu_frequency_range
@@ -69,6 +70,15 @@ class Plugin:
             min_tdp, max_tdp = cpu_utils.get_intel_tdp_limits()
             settings['maxTdp'] = max_tdp
             settings['minTdp'] = min_tdp
+
+            pl2_mode, pl2_offset = intel_rapl.get_pl2_settings()
+            settings.setdefault('pl2Mode', pl2_mode)
+            settings.setdefault('pl2Offset', pl2_offset)
+
+            pl2_interface = intel_rapl.detect_interface()
+            pl2_max = intel_rapl.get_pl2_max(pl2_interface) if pl2_interface else None
+            settings['pl2Max'] = pl2_max
+            settings['pl2Supported'] = bool(pl2_interface) and pl2_max is not None and pl2_max > max_tdp
           else:
             # firmware-declared per-device TDP range (e.g. Lenovo Legion WMI).
             # setdefault so a user's saved custom range is not overwritten.
@@ -108,6 +118,26 @@ class Plugin:
 
   async def persist_gpu(self, minGpuFrequency, maxGpuFrequency, gameId):
     plugin_utils.persist_gpu(minGpuFrequency, maxGpuFrequency, gameId)
+
+  async def persist_pl2(self, pl2Mode, pl2Offset):
+    try:
+      if pl2Mode not in intel_rapl.PL2_MODES:
+        pl2Mode = intel_rapl.DEFAULT_PL2_MODE
+      if not isinstance(pl2Offset, int) or isinstance(pl2Offset, bool):
+        pl2Offset = intel_rapl.DEFAULT_PL2_OFFSET
+      pl2Offset = max(0, min(intel_rapl.PL2_OFFSET_MAX_WATTS, pl2Offset))
+
+      persist_setting('pl2Mode', pl2Mode)
+      persist_setting('pl2Offset', pl2Offset)
+
+      # reapply immediately so the change is felt right away, not just on the next poll
+      interface = intel_rapl.detect_interface()
+      if interface:
+        current_pl1 = intel_rapl.get_pl1_current(interface)
+        if current_pl1 is not None:
+          intel_rapl.apply_pl1_pl2(current_pl1)
+    except Exception as e:
+      decky_plugin.logger.error(f"error failed to persist_pl2 {pl2Mode}={pl2Offset} {e}")
 
   async def set_power_governor(self, powerGovernorInfo, gameId):
     scaling_driver = powerGovernorInfo.get('scalingDriver')

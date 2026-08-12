@@ -7,6 +7,8 @@ import {
   setFixedGpuFrequency,
   setGpuFrequency,
   setGpuMode,
+  setPl2Mode,
+  setPl2Offset,
   setReduxTdp,
   updateAdvancedOption,
   updateInitialLoad,
@@ -17,6 +19,7 @@ import {
   setSetting,
   setPollTdp,
   persistTdp,
+  persistPl2,
   saveTdpProfiles,
 } from "../backend/utils";
 import { PayloadAction } from "@reduxjs/toolkit";
@@ -32,6 +35,7 @@ const resetTdpActionTypes = [
 ] as string[];
 
 const debouncedPersistTdp = debounce(persistTdp, 1000);
+const debouncedPersistPl2 = debounce(persistPl2, 500);
 
 const persistGpu = ({ state, activeGameId, advancedState }: any) => {
   return saveTdpProfiles({
@@ -72,6 +76,14 @@ export const settingsMiddleware =
 
     if (action.type === setReduxTdp.type) {
       debouncedPersistTdp({ tdp: action.payload, gameId: activeGameId });
+    }
+
+    if (action.type === setPl2Mode.type || action.type === setPl2Offset.type) {
+      // global setting -- not scoped to activeGameId
+      debouncedPersistPl2({
+        pl2Mode: state.settings.pl2Mode,
+        pl2Offset: state.settings.pl2Offset,
+      });
     }
 
     if (action.type === updatePollRate.type) {

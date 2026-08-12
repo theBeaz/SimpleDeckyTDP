@@ -1,6 +1,5 @@
 from enum import Enum
 import os
-import subprocess
 import decky_plugin
 import plugin_timeout
 import advanced_options
@@ -10,6 +9,7 @@ from devices import lenovo, rog_ally, steam_deck
 from plugin_settings import set_setting, get_saved_settings
 import device_utils
 import ryzenadj
+import intel_rapl
 
 AMD_PSTATE_PATH="/sys/devices/system/cpu/amd_pstate/status"
 AMD_LEGACY_CPU_BOOST_PATH = "/sys/devices/system/cpu/cpufreq/boost"
@@ -19,18 +19,11 @@ INTEL_CPU_BOOST_PATH = '/sys/devices/system/cpu/intel_pstate/no_turbo'
 
 SMT_PATH= "/sys/devices/system/cpu/smt/control"
 
-INTEL_TDP_PATH = None
-INTEL_TDP_PREFIX="/sys/devices/virtual/powercap/intel-rapl-mmio/intel-rapl-mmio:0"
-INTEL_LEGACY_TDP_PREFIX="/sys/devices/virtual/powercap/intel-rapl/intel-rapl:0"
-
 INTEL_MAX_TDP_SETTING = 'INTEL_MAX_TDP_SETTING'
 
 # arbitrary values can be set on Intel devices, likely a bug in intel-rapl
 # as a safety mitigation, 40W to be used as as a ceiling for PC handheld devices
 INTEL_MAX_TDP = 40
-
-# sysfs intel-rapl power limits are in microwatts (path suffix `_uw`)
-MICROWATTS_PER_WATT = 1_000_000
 
 class ScalingDrivers(Enum):
   INTEL_CPUFREQ = "intel_cpufreq"
@@ -38,29 +31,6 @@ class ScalingDrivers(Enum):
   PSTATE_EPP = "amd-pstate-epp"
   PSTATE = "amd-pstate"
   ACPI_CPUFREQ = "acpi-cpufreq"
-
-def use_legacy_intel_tdp():
-
-  if os.path.exists(INTEL_TDP_PREFIX):
-    return False
-  elif os.path.exists(INTEL_LEGACY_TDP_PREFIX):
-    return True
-
-  decky_plugin.logger.info("Warning: /sys endpoint for intel tdp not found")
-  return False
-
-def intel_tdp_path():
-  global INTEL_TDP_PATH
-
-  if INTEL_TDP_PATH:
-    return INTEL_TDP_PATH
-
-  if use_legacy_intel_tdp():
-    INTEL_TDP_PATH = f'{INTEL_LEGACY_TDP_PREFIX}/constraint_*_power_limit_uw'
-  else:
-    INTEL_TDP_PATH = f'{INTEL_TDP_PREFIX}/constraint_*_power_limit_uw'
-
-  return INTEL_TDP_PATH
 
 def set_tdp(tdp: int):
   if not advanced_options.tdp_control_enabled():
@@ -70,14 +40,7 @@ def set_tdp(tdp: int):
     return steam_deck.set_tdp(tdp)
 
   if device_utils.is_intel():
-    tdp_path = intel_tdp_path()
-
-    if not tdp_path:
-      # TDP not supported on this intel chipset, no known path to set TDP
-      decky_plugin.logger.info("No Known Path for to set TDP on this Intel chipset")
-      return
-
-    return execute_tdp_command(tdp, tdp_path)
+    return intel_rapl.apply_pl1_pl2(tdp)
   else:
     return set_amd_tdp(tdp)
 
@@ -361,31 +324,23 @@ def get_default_tdp_range():
   return None
 
 def get_intel_max_tdp():
-  tdp_prefix = INTEL_LEGACY_TDP_PREFIX if use_legacy_intel_tdp() else INTEL_TDP_PREFIX
-
-  MAX_TDP_PATH = f'{tdp_prefix}/constraint_0_max_power_uw'
-  ALTERNATIVE_MAX_TDP_PATH = f'{tdp_prefix}/constraint_0_power_limit_uw'
-
+  # uses the same interface (msi-wmi-platform / RAPL MMIO / RAPL legacy) that
+  # apply_pl1_pl2() writes to, so max-TDP discovery never validates against a
+  # stale value sourced from a different interface than the one actually in use
   maximum_tdp = 15
 
   try:
     with plugin_timeout.time_limit(1):
-      max_tdp = 0
-      alt_max_tdp = 0
+      interface = intel_rapl.detect_interface()
+      if interface:
+        max_tdp, alt_max_tdp = intel_rapl.get_pl1_range(interface)[1], intel_rapl.get_pl1_current(interface)
+        max_tdp = max_tdp or 0
+        alt_max_tdp = alt_max_tdp or 0
 
-      if os.path.exists(MAX_TDP_PATH):
-        with open(MAX_TDP_PATH, 'r') as file:
-          max_tdp = int(file.read().strip()) / MICROWATTS_PER_WATT
-          file.close()
-      if os.path.exists(ALTERNATIVE_MAX_TDP_PATH):
-        with open(ALTERNATIVE_MAX_TDP_PATH, 'r') as file:
-          alt_max_tdp = int(file.read().strip()) / MICROWATTS_PER_WATT
-          file.close()
-
-      if alt_max_tdp >= max_tdp:
-        maximum_tdp = alt_max_tdp
-      else:
-        maximum_tdp = max_tdp
+        if alt_max_tdp >= max_tdp:
+          maximum_tdp = alt_max_tdp
+        else:
+          maximum_tdp = max_tdp
   except Exception as e:
     decky_plugin.logger.error(f'{__name__} error: get_intel_max_tdp {e}')
 
@@ -395,20 +350,3 @@ def get_intel_max_tdp():
   set_setting(INTEL_MAX_TDP_SETTING, maximum_tdp)
 
   return maximum_tdp
-
-def execute_tdp_command(tdp, tdp_path):
-  tdp_microwatts = tdp * MICROWATTS_PER_WATT
-  try:
-    if os.path.exists(tdp_path):
-      with open(tdp_path, 'w') as file:
-        file.write(tdp_microwatts)
-        file.close()
-    else:
-      # fallback to tdp via subprocess
-      env = os.environ.copy()
-      env["LD_LIBRARY_PATH"] = ""
-      cmd = f"echo '{tdp_microwatts}' | tee {tdp_path}"
-      result = subprocess.run(cmd, shell=True, check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-      return result
-  except Exception as e:
-    decky_plugin.logger.error(f'{__name__} Error: execute_tdp_command {e}')

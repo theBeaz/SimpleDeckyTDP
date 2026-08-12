@@ -11,6 +11,7 @@ export const CpuVendors = {
 export const MIN_TDP_RANGE = 3;
 export const DEFAULT_POLL_RATE = 15000;
 export const DEFAULT_START_TDP = 12;
+export const PL2_OFFSET_MAX_WATTS = 7;
 
 export const extractCurrentGameId = getCurrentGameId;
 

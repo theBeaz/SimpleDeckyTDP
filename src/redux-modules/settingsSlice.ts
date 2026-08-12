@@ -6,12 +6,14 @@ import {
   DEFAULT_POWER_CONTROLS,
   DEFAULT_START_TDP,
   MIN_TDP_RANGE,
+  PL2_OFFSET_MAX_WATTS,
   PowerControlsType,
 } from "../utils/constants";
 import { RootState } from "./store";
 import {
   AdvancedOptionsEnum,
   GpuModes,
+  Pl2Modes,
   logInfo,
   SteamDeckAdvancedOptions,
 } from "../backend/utils";
@@ -84,6 +86,11 @@ export interface SettingsState extends TdpRangeState, PollState, GpuState {
   cpuVendor?: string;
   isAcPower?: boolean;
   systemLanguage?: string;
+  // global (not per-profile) PL2 settings -- intentionally NOT on TdpProfile
+  pl2Mode: Pl2Modes;
+  pl2Offset: number;
+  pl2Max?: number;
+  pl2Supported?: boolean;
 }
 
 export type InitialStateType = Partial<SettingsState>;
@@ -114,6 +121,8 @@ const initialState: SettingsState = {
   },
   pollRate: DEFAULT_POLL_RATE, // milliseconds
   pluginVersionNum: "",
+  pl2Mode: Pl2Modes.FLAT,
+  pl2Offset: 7,
 };
 
 export const settingsSlice = createSlice({
@@ -210,6 +219,10 @@ export const settingsSlice = createSlice({
         supportsCustomAcPowerManagement,
         cpuVendor,
         systemLanguage,
+        pl2Mode,
+        pl2Offset,
+        pl2Max,
+        pl2Supported,
       } = action.payload;
       state.initialLoad = false;
       state.cpuVendor = cpuVendor;
@@ -219,6 +232,10 @@ export const settingsSlice = createSlice({
       state.maxTdp = action.payload.maxTdp || 15;
       state.enableTdpProfiles = action.payload.enableTdpProfiles || false;
       state.pollRate = action.payload.pollRate || DEFAULT_POLL_RATE;
+      state.pl2Mode = pl2Mode || Pl2Modes.FLAT;
+      state.pl2Offset = typeof pl2Offset === "number" ? pl2Offset : 7;
+      state.pl2Max = pl2Max;
+      state.pl2Supported = pl2Supported;
       if (action.payload.tdpProfiles) {
         merge(state.tdpProfiles, action.payload.tdpProfiles);
       }
@@ -337,6 +354,16 @@ export const settingsSlice = createSlice({
     },
     setEnableTdpProfiles: (state, action: PayloadAction<boolean>) => {
       state.enableTdpProfiles = action.payload;
+    },
+    setPl2Mode: (state, action: PayloadAction<Pl2Modes>) => {
+      // global setting -- deliberately NOT branched on currentGameId/enableTdpProfiles
+      state.pl2Mode = action.payload;
+    },
+    setPl2Offset: (state, action: PayloadAction<number>) => {
+      state.pl2Offset = Math.max(
+        0,
+        Math.min(PL2_OFFSET_MAX_WATTS, action.payload)
+      );
     },
     setCurrentGameInfo: (
       state,
@@ -569,6 +596,13 @@ export const cpuVendorSelector = (state: RootState) => state.settings.cpuVendor;
 
 export const acPowerSelector = (state: RootState) => state.settings.isAcPower;
 
+// PL2 selectors (global, not per-profile)
+export const pl2ModeSelector = (state: RootState) => state.settings.pl2Mode;
+export const pl2OffsetSelector = (state: RootState) => state.settings.pl2Offset;
+export const pl2MaxSelector = (state: RootState) => state.settings.pl2Max;
+export const pl2SupportedSelector = (state: RootState) =>
+  state.settings.pl2Supported;
+
 export const supportsCustomAcPowerSelector = (state: RootState) =>
   state.settings.supportsCustomAcPowerManagement;
 
@@ -696,6 +730,8 @@ export const {
   setReduxTdp,
   updateEpp,
   setAcPower,
+  setPl2Mode,
+  setPl2Offset,
 } = settingsSlice.actions;
 
 export default settingsSlice.reducer;

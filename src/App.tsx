@@ -10,6 +10,7 @@ import {
   useIsInitiallyLoading,
 } from "./hooks/useInitialState";
 import Gpu from "./components/molecules/Gpu";
+import Pl2Control from "./components/molecules/Pl2Control";
 import AdvancedOptions from "./components/molecules/AdvancedOptions";
 import OtaUpdates from "./components/molecules/OtaUpdates";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -43,6 +44,7 @@ const App: FC = memo(({}) => {
           <DeckySection>
             <TdpProfiles isDesktop={isDesktop} />
             {tdpControlEnabled && <TdpSlider disabled={maxTdpAcProfileEnabled} />}
+            {tdpControlEnabled && <Pl2Control />}
             {gpuControlEnabled && <Gpu />}
           </DeckySection>
           <PowerControl />
