@@ -120,8 +120,23 @@ def get_pl1_range(interface):
   return min_w, max_w
 
 
+def _reliable_max(declared, current):
+  # constraint_*_max_power_uw is known to unreliably report 0 or transient
+  # low readings on some devices/kernels (msi-wmi-platform's min_value/max_value
+  # attributes don't have this problem -- they're real firmware-declared
+  # constants). Treat a falsy declared max as "unknown" rather than trusting
+  # it outright, so a flaky reading never clamps below what's already applied.
+  candidates = [v for v in (declared, current) if v]
+  if not candidates:
+    return None
+  return max(candidates)
+
+
 def get_pl2_max(interface):
-  return _to_watts(_read_int(_pl2_max_path(interface)), interface)
+  declared = _to_watts(_read_int(_pl2_max_path(interface)), interface)
+  if interface == MSI_WMI:
+    return declared
+  return _reliable_max(declared, get_pl2_current(interface))
 
 
 def get_pl2_min(interface):
@@ -202,11 +217,19 @@ def apply_pl1_pl2(pl1_target):
     decky_plugin.logger.info(f'{__name__} no known Intel RAPL/firmware-attribute interface found')
     return False
 
-  pl1_min, pl1_max = get_pl1_range(interface)
-  if pl1_min is not None:
-    pl1_target = max(pl1_min, pl1_target)
-  if pl1_max is not None:
-    pl1_target = min(pl1_max, pl1_target)
+  if interface == MSI_WMI:
+    # only clamp against a live-read range on the interface where min_value/
+    # max_value are reliable firmware-declared constants. RAPL's
+    # constraint_0_max_power_uw is known to report unreliable/transient low
+    # values (observed: 17W on a device whose real PL1 max is 30W) and must
+    # never silently override what the user actually asked for -- matches
+    # original upstream behaviour, which never clamped Intel TDP writes here
+    # at all; the frontend slider's min/max already governs the valid range.
+    pl1_min, pl1_max = get_pl1_range(interface)
+    if pl1_min is not None:
+      pl1_target = max(pl1_min, pl1_target)
+    if pl1_max is not None:
+      pl1_target = min(pl1_max, pl1_target)
 
   pl2_max = get_pl2_max(interface)
   pl2_min = get_pl2_min(interface)

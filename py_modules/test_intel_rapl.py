@@ -17,7 +17,8 @@ if 'plugin_settings' not in sys.modules:
   fake_plugin_settings.get_saved_settings = lambda: {}
   sys.modules['plugin_settings'] = fake_plugin_settings
 
-from intel_rapl import resolve_pl2
+import intel_rapl
+from intel_rapl import resolve_pl2, _reliable_max, get_pl2_max, MSI_WMI, RAPL_MMIO
 
 
 def run():
@@ -43,13 +44,45 @@ def run():
       failures.append(f"{desc}: resolve_pl2({pl1},{mode!r},{offset},{pl2_max},{pl2_min}) = {actual}, expected {expected}")
     print(f"[{status}] {desc}: got {actual}, expected {expected}")
 
+  # _reliable_max: guards against RAPL's known-flaky constraint_*_max_power_uw
+  # (observed on real hardware: declared max read as 0, or a stale/transient
+  # low value, while the device's real ceiling is much higher)
+  reliable_cases = [
+    (0, 37, 37, "declared max unreliable (0) -> fall back to current"),
+    (None, 37, 37, "declared max missing -> fall back to current"),
+    (17, 37, 37, "declared max lower than current -> take the greater"),
+    (40, 37, 40, "declared max higher than current -> take the greater"),
+    (0, None, None, "both unknown -> None, caller degrades to flat"),
+  ]
+  for declared, current, expected, desc in reliable_cases:
+    actual = _reliable_max(declared, current)
+    status = "OK" if actual == expected else "FAIL"
+    if actual != expected:
+      failures.append(f"{desc}: _reliable_max({declared},{current}) = {actual}, expected {expected}")
+    print(f"[{status}] {desc}: got {actual}, expected {expected}")
+
+  # get_pl2_max: regression test for the exact bug seen on real hardware --
+  # constraint_1_max_power_uw reading 0 must not make PL2 permanently
+  # unable to exceed PL1 (i.e. pl2Supported must not go permanently False)
+  orig_read_int = intel_rapl._read_int
+  try:
+    intel_rapl._read_int = lambda path: 0 if 'max_power_uw' in (path or '') else 37_000_000
+    actual = get_pl2_max(RAPL_MMIO)
+    desc = "get_pl2_max falls back to current (37) when declared max reads 0 (RAPL)"
+    status = "OK" if actual == 37 else "FAIL"
+    if actual != 37:
+      failures.append(f"{desc}: got {actual}, expected 37")
+    print(f"[{status}] {desc}: got {actual}, expected 37")
+  finally:
+    intel_rapl._read_int = orig_read_int
+
   if failures:
     print(f"\n{len(failures)} FAILURE(S):")
     for f in failures:
       print(f"  - {f}")
     raise SystemExit(1)
 
-  print(f"\nAll {len(cases)} resolve_pl2 cases passed.")
+  print(f"\nAll {len(cases) + len(reliable_cases) + 1} cases passed.")
 
 
 if __name__ == '__main__':
