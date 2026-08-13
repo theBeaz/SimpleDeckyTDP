@@ -91,6 +91,11 @@ export interface SettingsState extends TdpRangeState, PollState, GpuState {
   pl2Offset: number;
   pl2Max?: number;
   pl2Supported?: boolean;
+  // Intel-only: whether the msi-wmi-platform firmware-attribute interface is
+  // present on this kernel. RAPL is inert on hardware where it exists at
+  // all, so TDP control is only functional when this is true -- undefined
+  // until settings load, and irrelevant on non-Intel devices.
+  intelTdpAvailable?: boolean;
 }
 
 export type InitialStateType = Partial<SettingsState>;
@@ -223,6 +228,7 @@ export const settingsSlice = createSlice({
         pl2Offset,
         pl2Max,
         pl2Supported,
+        intelTdpAvailable,
       } = action.payload;
       state.initialLoad = false;
       state.cpuVendor = cpuVendor;
@@ -236,6 +242,7 @@ export const settingsSlice = createSlice({
       state.pl2Offset = typeof pl2Offset === "number" ? pl2Offset : 7;
       state.pl2Max = pl2Max;
       state.pl2Supported = pl2Supported;
+      state.intelTdpAvailable = intelTdpAvailable;
       if (action.payload.tdpProfiles) {
         merge(state.tdpProfiles, action.payload.tdpProfiles);
       }
@@ -602,6 +609,8 @@ export const pl2OffsetSelector = (state: RootState) => state.settings.pl2Offset;
 export const pl2MaxSelector = (state: RootState) => state.settings.pl2Max;
 export const pl2SupportedSelector = (state: RootState) =>
   state.settings.pl2Supported;
+export const intelTdpAvailableSelector = (state: RootState) =>
+  state.settings.intelTdpAvailable;
 
 export const supportsCustomAcPowerSelector = (state: RootState) =>
   state.settings.supportsCustomAcPowerManagement;

@@ -9,7 +9,7 @@ from devices import lenovo, rog_ally, steam_deck
 from plugin_settings import set_setting, get_saved_settings
 import device_utils
 import ryzenadj
-import intel_rapl
+import intel_tdp
 
 AMD_PSTATE_PATH="/sys/devices/system/cpu/amd_pstate/status"
 AMD_LEGACY_CPU_BOOST_PATH = "/sys/devices/system/cpu/cpufreq/boost"
@@ -40,7 +40,12 @@ def set_tdp(tdp: int):
     return steam_deck.set_tdp(tdp)
 
   if device_utils.is_intel():
-    return intel_rapl.apply_pl1_pl2(tdp)
+    # apply_pl1_pl2 refuses to write (returns False, logs) when the
+    # msi-wmi-platform firmware-attribute interface isn't present -- there
+    # is deliberately no RAPL fallback here (RAPL is inert on hardware where
+    # this interface exists at all; writing it produces misleading readings
+    # for anyone debugging without actually controlling anything)
+    return intel_tdp.apply_pl1_pl2(tdp)
   else:
     return set_amd_tdp(tdp)
 
@@ -296,9 +301,17 @@ def get_scaling_driver():
     return ''
 
 def get_intel_tdp_limits():
-  # while there is a max TDP provided by intel, there is no min
+  # firmware-declared range from msi-wmi-platform when available; these are
+  # real per-model constants (read them, do not hardcode), not RAPL's
+  # unreliable metadata -- fall back to conservative defaults when the
+  # interface isn't present on this kernel
   min_tdp = 3
   max_tdp = 15
+
+  if intel_tdp.is_available():
+    fw_min, _ = intel_tdp.get_pl1_range()
+    if fw_min:
+      min_tdp = fw_min
 
   saved_max_tdp = get_saved_settings().get(INTEL_MAX_TDP_SETTING, None)
 
@@ -324,23 +337,20 @@ def get_default_tdp_range():
   return None
 
 def get_intel_max_tdp():
-  # uses the same interface (msi-wmi-platform / RAPL MMIO / RAPL legacy) that
-  # apply_pl1_pl2() writes to, so max-TDP discovery never validates against a
-  # stale value sourced from a different interface than the one actually in use
+  # uses the same interface (msi-wmi-platform) that apply_pl1_pl2() writes
+  # to, so max-TDP discovery never validates against a value sourced from a
+  # different (and on this hardware, inert) interface than the one actually
+  # in use. ppt_pl1_spl/max_value is a real firmware-declared constant, so
+  # unlike RAPL's max_power_uw there's no need to cross-check against the
+  # current value here.
   maximum_tdp = 15
 
   try:
     with plugin_timeout.time_limit(1):
-      interface = intel_rapl.detect_interface()
-      if interface:
-        max_tdp, alt_max_tdp = intel_rapl.get_pl1_range(interface)[1], intel_rapl.get_pl1_current(interface)
-        max_tdp = max_tdp or 0
-        alt_max_tdp = alt_max_tdp or 0
-
-        if alt_max_tdp >= max_tdp:
-          maximum_tdp = alt_max_tdp
-        else:
-          maximum_tdp = max_tdp
+      if intel_tdp.is_available():
+        _, fw_max = intel_tdp.get_pl1_range()
+        if fw_max:
+          maximum_tdp = fw_max
   except Exception as e:
     decky_plugin.logger.error(f'{__name__} error: get_intel_max_tdp {e}')
 

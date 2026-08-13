@@ -90,7 +90,7 @@ export enum GpuModes {
   FIXED = "FIXED",
 }
 
-// values must match intel_rapl.PL2_MODES exactly (lowercase) -- unlike GpuModes,
+// values must match intel_tdp.PL2_MODES exactly (lowercase) -- unlike GpuModes,
 // these do NOT support TS's enum-reverse-mapping trick (key text != value text)
 export enum Pl2Modes {
   FLAT = "flat",
